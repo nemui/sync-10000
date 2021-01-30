@@ -59,7 +59,7 @@ fn save_state(reference_directory: &str, state: &str) -> Result<()> {
     // save directory map to file
     let state_file =
         File::create(state).with_context(|| format!("Failed to save state to {}", state))?;
-    serde_json::to_writer(state_file, &entries)?;
+    bincode::serialize_into(state_file, &entries)?;
 
     Ok(())
 }
@@ -89,7 +89,7 @@ fn sync_directory(
 ) -> Result<()> {
     let state_file =
         File::open(state).with_context(|| format!("Failed to open state in {}", state))?;
-    let entries: HashMap<String, Vec<Record>> = serde_json::from_reader(state_file)?;
+    let entries: HashMap<String, Vec<Record>> = bincode::deserialize_from(state_file)?;
     let mut operations = Vec::new();
     let base = Path::new(target_directory);
     let mut processed_parents: HashMap<String, bool> = HashMap::new();
