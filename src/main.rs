@@ -22,38 +22,28 @@ fn save_state(reference_directory: &str, state: &str) -> Result<()> {
     entries.insert("".to_string(), Vec::new());
     let base = Path::new(reference_directory);
     for entry in WalkDir::new(reference_directory).into_iter().skip(1) {
-        let dir_entry = entry?;
-        let name = dir_entry.file_name().to_str().unwrap();
-        let path = dir_entry.path();
-        let relative_parent = path
-            .parent()
-            .unwrap()
-            .strip_prefix(base)
-            .unwrap()
-            .to_str()
-            .unwrap();
-        let relative_self = path
-            .strip_prefix(base)
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .to_string();
+        let entry = entry?;
+        let name = String::from(entry.file_name().to_string_lossy());
+        let path = entry.path();
+        let relative_parent = path.parent().unwrap().strip_prefix(base)?;
+        let relative_self = relative_parent.join(&name);
 
-        let mut record = Record {
-            name: name.to_string(),
-            hash: None,
-        };
+        let mut record = Record { name, hash: None };
 
-        if dir_entry.file_type().is_dir() {
-            entries.insert(relative_self, Vec::new());
+        if entry.file_type().is_dir() {
+            entries.insert(String::from(relative_self.to_string_lossy()), Vec::new());
         } else {
             record.hash = Some(calculate_hash(&path).unwrap());
         }
 
-        entries.get_mut(relative_parent).unwrap().push(record);
+        entries
+            .get_mut(&String::from(relative_parent.to_string_lossy()))
+            .unwrap()
+            .push(record);
     }
 
     // save directory map to file
+    // ideally that would have been a database so that we don't have to hold the entire directory structure in memory
     let state_file =
         File::create(state).with_context(|| format!("Failed to save state to {}", state))?;
     bincode::serialize_into(state_file, &entries)?;
@@ -91,39 +81,23 @@ fn sync_directory(
     let base = Path::new(target_directory);
     let mut processed_parents: HashMap<String, bool> = HashMap::new();
     for entry in WalkDir::new(target_directory).into_iter().skip(1) {
-        let dir_entry = entry?;
-        let name = dir_entry.file_name().to_str().unwrap();
-        let path = dir_entry.path();
-        let relative_parent = path
-            .parent()
-            .unwrap()
-            .strip_prefix(base)
-            .unwrap()
-            .to_str()
-            .unwrap();
-        let relative_self = path
-            .strip_prefix(base)
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .to_string();
+        let entry = entry?;
+        let name = String::from(entry.file_name().to_string_lossy());
+        let path = entry.path();
+        let relative_parent_path = path.parent().unwrap().strip_prefix(base)?;
+        let relative_parent = String::from(relative_parent_path.to_string_lossy());
+        let relative_self = relative_parent_path.join(entry.file_name());
 
-        let is_dir = dir_entry.file_type().is_dir();
+        let is_dir = entry.file_type().is_dir();
 
-        match entries.get(relative_parent) {
+        match entries.get(&relative_parent) {
             Some(records) => {
                 // copy reference records that do not exist in target
-                if !processed_parents.contains_key(relative_parent) {
+                if !processed_parents.contains_key(&relative_parent) {
                     processed_parents.insert(relative_parent.to_string(), true);
                     for record in records {
-                        let path = Path::new(base);
-                        let relative_self = path
-                            .join(relative_parent)
-                            .join(&record.name)
-                            .into_os_string()
-                            .into_string()
-                            .unwrap();
-                        if !Path::new(&relative_self).exists() {
+                        let relative_self = base.join(&relative_parent).join(&record.name);
+                        if !relative_self.exists() {
                             let mut copy_operations =
                                 copy_record(record, &relative_parent, &entries)?;
                             copy_operations.reverse();
@@ -136,21 +110,21 @@ fn sync_directory(
                     let record_is_dir = record.hash.is_none();
                     // delete record if the type doesn't match
                     if is_dir != record_is_dir {
-                        operations.push(format!("delete `{}`", relative_self))
+                        operations.push(format!("delete `{}`", relative_self.display()))
                     }
                     // do nothing for directories
                     else if !is_dir {
                         // copy from source if hashes do not match
                         let hash = calculate_hash(&path)?;
                         if &hash != record.hash.as_ref().unwrap() {
-                            operations.push(format!("copy `{}`", relative_self))
+                            operations.push(format!("copy `{}`", relative_self.display()))
                         }
                     }
                 } else {
-                    operations.push(format!("delete `{}`", relative_self));
+                    operations.push(format!("delete `{}`", relative_self.display()));
                 }
             }
-            None => operations.push(format!("delete `{}`", relative_self)),
+            None => operations.push(format!("delete `{}`", relative_self.display())),
         }
     }
 
@@ -167,12 +141,11 @@ fn copy_record(
     entries: &HashMap<String, Vec<Record>>,
 ) -> Result<Vec<String>> {
     let mut operations = Vec::new();
-    let path = Path::new(relative_parent);
-    let relative_self = path
-        .join(&record.name)
-        .into_os_string()
-        .into_string()
-        .unwrap();
+    let relative_self = String::from(
+        Path::new(relative_parent)
+            .join(&record.name)
+            .to_string_lossy(),
+    );
     if record.hash.is_none() {
         operations.push(format!("create `{}`", relative_self));
         for record in entries.get(&relative_self).unwrap() {
