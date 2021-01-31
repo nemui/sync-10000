@@ -13,7 +13,6 @@ use walkdir::WalkDir;
 #[derive(Serialize, Deserialize, Debug)]
 struct Record {
     name: String,
-    is_dir: bool,
     hash: Option<String>,
 }
 
@@ -42,12 +41,10 @@ fn save_state(reference_directory: &str, state: &str) -> Result<()> {
 
         let mut record = Record {
             name: name.to_string(),
-            is_dir: false,
             hash: None,
         };
 
         if dir_entry.file_type().is_dir() {
-            record.is_dir = true;
             entries.insert(relative_self, Vec::new());
         } else {
             record.hash = Some(calculate_hash(&path).unwrap());
@@ -136,8 +133,9 @@ fn sync_directory(
                 }
 
                 if let Some(record) = records.iter().find(|&record| record.name == name) {
+                    let record_is_dir = record.hash.is_none();
                     // delete record if the type doesn't match
-                    if is_dir != record.is_dir {
+                    if is_dir != record_is_dir {
                         operations.push(format!("delete `{}`", relative_self))
                     }
                     // do nothing for directories
@@ -175,7 +173,7 @@ fn copy_record(
         .into_os_string()
         .into_string()
         .unwrap();
-    if record.is_dir {
+    if record.hash.is_none() {
         operations.push(format!("create `{}`", relative_self));
         for record in entries.get(&relative_self).unwrap() {
             operations.append(&mut copy_record(record, &relative_self, &entries)?);
